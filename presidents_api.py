@@ -11,6 +11,8 @@ from typing import Union,List
 from pydantic import BaseModel
 from googletrans import Translator
 import json
+import os
+from deep_translator import GoogleTranslator
 
 Translator= Translator()
 
@@ -48,6 +50,15 @@ class Event(BaseModel):
     category: str
     images: List[str]   # multiple images
 
+class GalleryEvent(BaseModel):
+    title: str
+    description: str
+    date: date
+    location: str
+    year: int
+    category: str
+    folder_url: str
+
 class UpdateEvent(BaseModel):
     id: int
     title: str
@@ -58,6 +69,15 @@ class UpdateEvent(BaseModel):
     category: str
     images: Union[List[str], str]   # multiple images
 
+class UpdateGalleryEvent(BaseModel):
+    id: int
+    title: str
+    description: str
+    date: date
+    location: str
+    year: int
+    category: str
+    folder_url: str
 
 class MemberDetail(BaseModel):
     fullname:str
@@ -85,7 +105,7 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173","http://localhost:5174","http://127.0.0.1:5173"],
+    allow_origins=["http://localhost:5173","http://localhost:5174","http://127.0.0.1:5173","*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -96,7 +116,7 @@ def get_db_connection():
         host="localhost",
         user="root",
         password="",
-        database="members_trial"
+        database="tdnvm"
     )
 
 @app.get("/")
@@ -204,15 +224,15 @@ def create_event(member: CoreTeamMember):
         
         new_member_gu={
             'id':new_id,
-            'name': Translator.translate(member.name,dest='gu').text,
-            'designation': Translator.translate(member.designation,dest='gu').text,
+            'name': GoogleTranslator(source='auto', target='gu').translate(member.name),
+            'designation': GoogleTranslator(source='auto', target='gu').translate(member.designation),
             'photo': member.photo,
-            'description': Translator.translate(member.description,dest='gu').text,
+            'description': GoogleTranslator(source='auto', target='gu').translate(member.description),
             'email': member.email,
             'phone': member.phone,
             'linkedin': member.linkedin,
             'experience': member.experience,
-            'achievements': Translator.translate(member.achievements,dest='gu').text,
+            'achievements': GoogleTranslator(source='auto', target='gu').translate(member.achievements),
         }
 
         query = """
@@ -301,15 +321,15 @@ def update_coreteam_member(member: CoreTeamMember):
             WHERE id=%s
             """,
             (
-                Translator.translate(member.name,dest='gu').text,
-                Translator.translate(member.designation,dest='gu').text,
+                GoogleTranslator(source='auto', target='gu').translate(member.name),
+                GoogleTranslator(source='auto', target='gu').translate(member.designation),
                 member.photo,
-                Translator.translate(member.description,dest='gu').text,
+                GoogleTranslator(source='auto', target='gu').translate(member.description),
                 member.email,
                 member.phone,
                 member.linkedin,
                 member.experience,
-                Translator.translate(member.achievements,dest='gu').text,
+                GoogleTranslator(source='auto', target='gu').translate(member.achievements),
                 member_id,
             ),
         )
@@ -466,9 +486,29 @@ def create_event(event: Event):
     try:
         connection = get_db_connection()
         cursor = connection.cursor()
-
+        folder_url = event.images[0]
         # Convert list of images into comma-separated string (or use JSON if column supports it)
-        images_str = ",".join(event.images)
+        try:
+            if not os.path.isdir(folder_url):
+                raise FileNotFoundError(f"Folder not found: {folder_url}")
+
+            # Allowed extensions
+            allowed_extensions = ('.jpg', '.jpeg', '.webp')
+
+            # Filter files by extension
+            image_files = [
+                f for f in os.listdir(folder_url)
+                if os.path.isfile(os.path.join(folder_url, f)) and f.lower().endswith(allowed_extensions)
+            ]
+            # return image_files
+            for i in range(len(image_files)):
+                image_files[i] = folder_url + "/" + image_files[i]
+
+        except Exception as e:
+            print(f"Error: {e}")
+            # return []
+        images_str = ",".join(image_files)
+        
 
         query = """
         INSERT INTO events_en (title, description, date, location, year, category, images)
@@ -502,12 +542,12 @@ def create_event(event: Event):
             
         new_event_gu={
             'id':new_id,
-            'title': Translator.translate(event.title,dest='gu').text,
-            'description': Translator.translate(event.description,dest='gu').text,
+            'title':GoogleTranslator(source='auto', target='gu').translate(event.title),
+            'description': GoogleTranslator(source='auto', target='gu').translate(event.description),
             'date':event.date,
-            'location':  Translator.translate(event.location,dest='gu').text,
+            'location':  GoogleTranslator(source='auto', target='gu').translate(event.location),
             'year': event.year,
-            'category':  Translator.translate(event.category,dest='gu').text,
+            'category':GoogleTranslator(source='auto', target='gu').translate(event.category),
             'images':event.images,}
             
         query_gu = """
@@ -552,7 +592,28 @@ def update_member(event: UpdateEvent):
     id= event.id
     images = event.images
     if isinstance(images, list):
-        images_str = ",".join(images)
+        folder_url = event.images[0]
+        # Convert list of images into comma-separated string (or use JSON if column supports it)
+        try:
+            if not os.path.isdir(folder_url):
+                raise FileNotFoundError(f"Folder not found: {folder_url}")
+
+            # Allowed extensions
+            allowed_extensions = ('.jpg', '.jpeg', '.webp')
+
+            # Filter files by extension
+            image_files = [
+                f for f in os.listdir(folder_url)
+                if os.path.isfile(os.path.join(folder_url, f)) and f.lower().endswith(allowed_extensions)
+            ]
+            # return image_files
+            for i in range(len(image_files)):
+                image_files[i] = folder_url + "/" + image_files[i]
+
+        except Exception as e:
+            print(f"Error: {e}")
+            # return []
+        images_str = ",".join(image_files)
     else:
         images_str = images or ""
     # 1. Check if event exists
@@ -586,7 +647,7 @@ def update_member(event: UpdateEvent):
         SET title = %s, description = %s, date = %s, location = %s, year = %s, category = %s, images = %s
         WHERE id = %s
         """,
-        (Translator.translate(event.title, dest='gu').text, Translator.translate(event.description, dest='gu').text, event.date, Translator.translate(event.location, dest='gu').text, event.year, Translator.translate(event.category, dest='gu').text, images_str, id),
+        (GoogleTranslator(source='auto', target='gu').translate(event.title), GoogleTranslator(source='auto', target='gu').translate(event.description), event.date, GoogleTranslator(source='auto', target='gu').translate(event.location), event.year, GoogleTranslator(source='auto', target='gu').translate(event.category), images_str, id),
     )
     conn.commit()
 
@@ -652,14 +713,35 @@ def get_all_gallery_events_en():
 
 
 @app.post("/gallery_events_en")
-def create_event(event: Event):
+def create_gallery_event(event: GalleryEvent):
+    folder_url_list= event.folder_url.split("\\")
+    folder_url = "/".join(folder_url_list)
     try:
         connection = get_db_connection()
         cursor = connection.cursor()
 
         # Convert list of images into comma-separated string (or use JSON if column supports it)
-        images_str = ",".join(event.images)
+        try:
+            if not os.path.isdir(folder_url):
+                raise FileNotFoundError(f"Folder not found: {folder_url}")
 
+            # Allowed extensions
+            allowed_extensions = ('.jpg', '.jpeg', '.webp')
+
+            # Filter files by extension
+            image_files = [
+                f for f in os.listdir(folder_url)
+                if os.path.isfile(os.path.join(folder_url, f)) and f.lower().endswith(allowed_extensions)
+            ]
+            # return image_files
+            for i in range(len(image_files)):
+                image_files[i] = folder_url + "/" + image_files[i]
+
+        except Exception as e:
+            print(f"Error: {e}")
+            # return []
+        images_str = ",".join(image_files)
+        print=images_str
         query = """
         INSERT INTO gallery_events_en (title, description, date, location, year, category, images)
         VALUES (%s, %s, %s, %s, %s, %s, %s);
@@ -690,25 +772,31 @@ def create_event(event: Event):
             'location': event.location,
             'year': event.year,
             'category': event.category,
-            'images':event.images,}
+            'images':images_str,}
         
         
         query = """
         INSERT INTO gallery_events_gu (id,title, description, date, location, year, category, images)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
         """
+        # translator = Translator()
+        gu_title = GoogleTranslator(source='auto', target='gu').translate(event.title)
+        gu_description = GoogleTranslator(source='auto', target='gu').translate(event.description)
+        gu_location = GoogleTranslator(source='auto', target='gu').translate(event.location)
+        gu_category = GoogleTranslator(source='auto', target='gu').translate(event.category)
+
         values = (
             new_id,
-            Translator.translate(event.title,dest='gu').text,
-            Translator.translate(event.description,dest='gu').text,
+            gu_title,
+            gu_description,
             event.date,
-            Translator.translate(event.location,dest='gu').text,
+            gu_location,
             event.year,
-            Translator.translate(event.category,dest='gu').text,
+            gu_category,
             images_str
         )
 
-
+        # print(values)
         cursor.execute(query, values)
 
         connection.commit()
@@ -725,16 +813,38 @@ def create_event(event: Event):
 
 
 @app.put("/update_gallery_event_en")
-def update_member(event: UpdateEvent):
+def update_member(event: UpdateGalleryEvent):
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
     id= event.id
-    # print(event)
-    images = event.images
-    if isinstance(images, list):
-        images_str = ",".join(images)
+    print(event)
+    folder_url = event.folder_url
+    if isinstance(folder_url, str):
+        # Convert list of images into comma-separated string (or use JSON if column supports it)
+        try:
+            folder_url_list=folder_url.split("\\")
+            folder_url = "/".join(folder_url_list)
+            if not os.path.isdir(folder_url):
+                raise FileNotFoundError(f"Folder not found: {folder_url}")
+
+            # Allowed extensions
+            allowed_extensions = ('.jpg', '.jpeg', '.webp')
+
+            # Filter files by extension
+            image_files = [
+                f for f in os.listdir(folder_url)
+                if os.path.isfile(os.path.join(folder_url, f)) and f.lower().endswith(allowed_extensions)
+            ]
+            # return image_files
+            for i in range(len(image_files)):
+                image_files[i] = folder_url + "/" + image_files[i]
+
+        except Exception as e:
+            print(f"Error: {e}")
+            # return []
+        images_str = ",".join(image_files)
     else:
-        images_str = images or ""
+        images_str = folder_url
     # 1. Check if event exists
     cursor.execute("SELECT * FROM gallery_events_en WHERE id = %s", (id,))
     existing = cursor.fetchone()
@@ -767,12 +877,12 @@ def update_member(event: UpdateEvent):
         WHERE id = %s
         """,
         (
-            Translator.translate(event.title,dest='gu').text,
-            Translator.translate(event.description,dest='gu').text,
+            GoogleTranslator(source='auto', target='gu').translate(event.title),
+            GoogleTranslator(source='auto', target='gu').translate(event.description),
             event.date,
-            Translator.translate(event.location,dest='gu').text,
+            GoogleTranslator(source='auto', target='gu').translate(event.location),
             event.year,
-            Translator.translate(event.category,dest='gu').text,
+            GoogleTranslator(source='auto', target='gu').translate(event.category),
             images_str,
             id),
     )    
@@ -929,12 +1039,12 @@ def add_member(member: MemberDetail):
 
         new_member_gu = {
             "srno": new_id,
-            "fullname": Translator.translate(member.fullname,dest='gu').text,
-            "address": Translator.translate(member.address,dest='gu').text,
+            "fullname": GoogleTranslator(source='auto', target='gu').translate(member.fullname),
+            "address": GoogleTranslator(source='auto', target='gu').translate(member.address),
             "birthdate": member.birthdate
         }
         query_gu = """
-        INSERT INTO members_details_gu (srno, fullname, address, birthdate)
+        INSERT INTO members_details_gu (id, fullname, address, birthdate)
         VALUES (%s, %s, %s, %s);
         """
 
@@ -994,7 +1104,7 @@ def update_member(member: UpdateMember):
         SET fullname = %s, address = %s, birthdate = %s
         WHERE srno = %s
         """,
-        (Translator.translate(member.fullname,dest='gu').text, Translator.translate(member.address,dest='gu').text, member.birthdate, srno),
+        (GoogleTranslator(source='auto', target='gu').translate(member.fullname),GoogleTranslator(source='auto', target='gu').translate(member.address), member.birthdate, srno),
     )
     conn.commit()
     conn.close()
@@ -1147,7 +1257,7 @@ def get_pending_users():
         connection = get_db_connection()
         cursor = connection.cursor(dictionary=True)
 
-        query = "SELECT * FROM users WHERE status = 'approved';"
+        query = "SELECT * FROM users WHERE status = 'approved' AND user_type = 'client';"
         cursor.execute(query)
         users = cursor.fetchall()
 
