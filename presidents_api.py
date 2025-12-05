@@ -1091,6 +1091,34 @@ def get_all_members_details_en():
             cursor.close()
             connection.close()
 
+@app.post("/search_members_en")
+def search_members_en(payload: dict):
+    name = payload.get("name", "")
+
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor(dictionary=True)
+
+        query = """
+            SELECT * FROM members_details_en
+            WHERE fullname LIKE %s
+            ORDER BY id DESC;
+        """
+
+        cursor.execute(query, (f"%{name}%",))
+        results = cursor.fetchall()
+
+        return results
+    
+    except mysql.connector.Error as e:
+        return {"error": str(e)}
+    
+    finally:
+        if 'connection' in locals() and connection.is_connected():
+            cursor.close()
+            connection.close()
+
+
 @app.post("/add_member_en")
 def add_member(member: MemberDetail):
     try:
