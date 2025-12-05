@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 from fastapi.exception_handlers import RequestValidationError
 from fastapi.exceptions import RequestValidationError
 from datetime import date,datetime
-from typing import Union,List
+from typing import Union,List,Optional
 from pydantic import BaseModel
 from googletrans import Translator
 import json
@@ -77,7 +77,7 @@ class UpdateGalleryEvent(BaseModel):
     location: str
     year: int
     category: str
-    folder_url: str
+    folder_url: Optional[str] = None
 
 class MemberDetail(BaseModel):
     fullname:str
@@ -488,21 +488,32 @@ def create_event(event: Event):
         cursor = connection.cursor()
         folder_url = event.images[0]
         # Convert list of images into comma-separated string (or use JSON if column supports it)
+        print(folder_url)
         try:
-            if not os.path.isdir(folder_url):
-                raise FileNotFoundError(f"Folder not found: {folder_url}")
+            # Allowed image extensions
+            allowed_extensions = ('.jpg', '.jpeg', '.png', '.webp')
+            image_files =[]
+            # --- STEP 1: Check if folder_url itself is an image file ---
+            if folder_url.lower().endswith(allowed_extensions):
+                # Direct image URL or file path → treat as a single image
+                # images_str = folder_url
+                image_files.append(folder_url)
+            else:
+                # --- STEP 2: Otherwise treat it as a directory ---
+                if not os.path.isdir(folder_url):
+                    raise FileNotFoundError(f"Folder not found: {folder_url}")
 
-            # Allowed extensions
-            allowed_extensions = ('.jpg', '.jpeg', '.webp')
+                # Filter files by extension
+                image_files = [
+                    f for f in os.listdir(folder_url)
+                    if os.path.isfile(os.path.join(folder_url, f)) and f.lower().endswith(allowed_extensions)
+                ]
 
-            # Filter files by extension
-            image_files = [
-                f for f in os.listdir(folder_url)
-                if os.path.isfile(os.path.join(folder_url, f)) and f.lower().endswith(allowed_extensions)
-            ]
-            # return image_files
-            for i in range(len(image_files)):
-                image_files[i] = folder_url + "/" + image_files[i]
+                # Convert file names to full paths
+                image_files = [os.path.join(folder_url, f) for f in image_files]
+
+                images_str = ",".join(image_files)
+            
 
         except Exception as e:
             print(f"Error: {e}")
@@ -590,32 +601,72 @@ def update_member(event: UpdateEvent):
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
     id= event.id
-    images = event.images
-    if isinstance(images, list):
+    if event.images is not None:
+        images = event.images
+
+    cursor.execute("SELECT * FROM events_en WHERE id = %s", (id,))
+    existing = cursor.fetchone()
+    if not existing:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    # -------------------------------
+    # PROCESS IMAGES PROPERLY
+    # -------------------------------
+    images_str = existing["images"] 
+    print(images)
+    if isinstance(images, list) and len(images) > 0:
         folder_url = event.images[0]
+        print(folder_url)
         # Convert list of images into comma-separated string (or use JSON if column supports it)
         try:
-            if not os.path.isdir(folder_url):
-                raise FileNotFoundError(f"Folder not found: {folder_url}")
+            allowed_extensions = ('.jpg', '.jpeg', '.png', '.webp')
+            image_files =[]
+            # --- STEP 1: Check if folder_url itself is an image file ---
+            if folder_url.lower().endswith(allowed_extensions):
+                # Direct image URL or file path → treat as a single image
+                # images_str = folder_url
+                image_files.append(folder_url)
+            else:
+                # --- STEP 2: Otherwise treat it as a directory ---
+                if not os.path.isdir(folder_url):
+                    raise FileNotFoundError(f"Folder not found: {folder_url}")
 
-            # Allowed extensions
-            allowed_extensions = ('.jpg', '.jpeg', '.webp')
+                # Filter files by extension
+                image_files = [
+                    f for f in os.listdir(folder_url)
+                    if os.path.isfile(os.path.join(folder_url, f)) and f.lower().endswith(allowed_extensions)
+                ]
 
-            # Filter files by extension
-            image_files = [
-                f for f in os.listdir(folder_url)
-                if os.path.isfile(os.path.join(folder_url, f)) and f.lower().endswith(allowed_extensions)
-            ]
-            # return image_files
-            for i in range(len(image_files)):
-                image_files[i] = folder_url + "/" + image_files[i]
+                # Convert file names to full paths
+                image_files = [os.path.join(folder_url, f) for f in image_files]
+
+                images_str = ",".join(image_files)
 
         except Exception as e:
             print(f"Error: {e}")
             # return []
         images_str = ",".join(image_files)
+    # -------------------------
+    # CASE 2: single URL sent as string
+    # -------------------------
+    elif isinstance(images, str) and images.strip():
+
+        allowed_extensions = ('.jpg', '.jpeg', '.png', '.webp')
+
+        # If it's a single image URL
+        if images.lower().endswith(allowed_extensions):
+            images_str = images  # use the new one
+        else:
+            # If not an image → ignore and keep existing
+            images_str = existing["images"]
+
+    # -------------------------
+    # CASE 3: images is None or empty → keep existing
+    # -------------------------
     else:
-        images_str = images or ""
+        images_str = existing["images"]
+        print(images_str)
     # 1. Check if event exists
     cursor.execute("SELECT * FROM events_en WHERE id = %s", (id,))
     existing = cursor.fetchone()
@@ -651,9 +702,12 @@ def update_member(event: UpdateEvent):
     )
     conn.commit()
 
+    cursor.execute("SELECT * FROM events_en WHERE id = %s", (id,))
+    updated_event = cursor.fetchone()
+
     conn.close()
 
-    return {"message": f"Member {id} updated successfully"}
+    return updated_event
 
 @app.delete("/delete_event_en")
 def delete_member(request: EventDeleteRequest):
@@ -741,7 +795,7 @@ def create_gallery_event(event: GalleryEvent):
             print(f"Error: {e}")
             # return []
         images_str = ",".join(image_files)
-        print=images_str
+        # print=images_str
         query = """
         INSERT INTO gallery_events_en (title, description, date, location, year, category, images)
         VALUES (%s, %s, %s, %s, %s, %s, %s);
@@ -819,6 +873,13 @@ def update_member(event: UpdateGalleryEvent):
     id= event.id
     print(event)
     folder_url = event.folder_url
+    # 1. Check if event exists
+    cursor.execute("SELECT * FROM gallery_events_en WHERE id = %s", (id,))
+    existing = cursor.fetchone()
+    if not existing:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Event not found")
+    
     if isinstance(folder_url, str):
         # Convert list of images into comma-separated string (or use JSON if column supports it)
         try:
@@ -844,13 +905,8 @@ def update_member(event: UpdateGalleryEvent):
             # return []
         images_str = ",".join(image_files)
     else:
-        images_str = folder_url
-    # 1. Check if event exists
-    cursor.execute("SELECT * FROM gallery_events_en WHERE id = %s", (id,))
-    existing = cursor.fetchone()
-    if not existing:
-        conn.close()
-        raise HTTPException(status_code=404, detail="Event not found")
+        images_str = existing['images']
+    
 
     # 2. Update event
     cursor.execute(
@@ -988,6 +1044,34 @@ def get_all_members_details_en():
         
         # Get all records from members_details
         query = "SELECT * FROM members_details_en;"
+        cursor.execute(query)
+        
+        # Get column names
+        columns = [desc[0] for desc in cursor.description]
+        
+        # Fetch all rows and convert to list of dictionaries
+        rows = cursor.fetchall()
+        members = [dict(zip(columns, row)) for row in rows]
+        
+        return members
+
+    except mysql.connector.Error as e:
+        return {"error": str(e)}
+    
+    finally:
+        if 'connection' in locals() and connection.is_connected():
+            cursor.close()
+            connection.close()
+
+
+@app.get("/latest_members_details_en", response_model=List[Dict])
+def get_all_members_details_en():
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor()
+        
+        # Get all records from members_details
+        query = "SELECT * FROM members_details_en ORDER BY id DESC LIMIT 10;"
         cursor.execute(query)
         
         # Get column names
