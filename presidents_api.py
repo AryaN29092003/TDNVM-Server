@@ -85,7 +85,7 @@ class MemberDetail(BaseModel):
     birthdate:datetime
 
 class UpdateMember(BaseModel):
-    srno: int
+    id: int
     fullname: str
     address: str
     birthdate: datetime 
@@ -1184,9 +1184,9 @@ def add_member(member: MemberDetail):
 def update_member(member: UpdateMember):
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
-    srno= member.srno
+    srno= member.id
     # 1. Check if member exists
-    cursor.execute("SELECT * FROM members_details_en WHERE srno = %s", (srno,))
+    cursor.execute("SELECT * FROM members_details_en WHERE id = %s", (srno,))
     existing = cursor.fetchone()
     if not existing:
         conn.close()
@@ -1197,14 +1197,14 @@ def update_member(member: UpdateMember):
         """
         UPDATE members_details_en
         SET fullname = %s, address = %s, birthdate = %s
-        WHERE srno = %s
+        WHERE id = %s
         """,
         (member.fullname, member.address, member.birthdate, srno),
     )
     conn.commit()
 
      # 1. Check if member exists
-    cursor.execute("SELECT * FROM members_details_gu WHERE srno = %s", (srno,))
+    cursor.execute("SELECT * FROM members_details_gu WHERE id = %s", (srno,))
     existing = cursor.fetchone()
     if not existing:
         conn.close()
@@ -1214,7 +1214,7 @@ def update_member(member: UpdateMember):
         """
         UPDATE members_details_gu
         SET fullname = %s, address = %s, birthdate = %s
-        WHERE srno = %s
+        WHERE id = %s
         """,
         (GoogleTranslator(source='auto', target='gu').translate(member.fullname),GoogleTranslator(source='auto', target='gu').translate(member.address), member.birthdate, srno),
     )
