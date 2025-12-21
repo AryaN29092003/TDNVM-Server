@@ -413,6 +413,19 @@ def get_all_members():
             cursor.close()
             connection.close()
 
+def normalize_images(images_value: str | None):
+    if not images_value:
+        return []
+
+    images_value = images_value.strip()
+
+    # Multiple images (pipe-separated)
+    if "|" in images_value:
+        return [img.strip() for img in images_value.split("|") if img.strip()]
+
+    # Single image URL (may contain commas)
+    return [images_value]
+
 @app.get("/events_gu", response_model=List[Dict])
 def get_all_events_gu():
     try:
@@ -428,8 +441,19 @@ def get_all_events_gu():
         
         # Fetch all rows and convert to list of dictionaries
         rows = cursor.fetchall()
-        members = [dict(zip(columns, row)) for row in rows]
-        
+        members = []
+        for row in rows:
+            row_dict = dict(zip(columns, row))
+            
+            # Fix images column if it's a JSON string
+            if "images" in row_dict and row_dict["images"]:
+                try:
+                    row_dict["images"] = normalize_images(row_dict.get("images"))
+                except Exception:
+                    row_dict["images"] = []
+            
+            members.append(row_dict)
+
         return members
 
     except mysql.connector.Error as e:
@@ -465,7 +489,7 @@ def get_all_events_en():
             # Fix images column if it's a JSON string
             if "images" in row_dict and row_dict["images"]:
                 try:
-                    row_dict["images"] = json.loads(row_dict["images"])
+                    row_dict["images"] = normalize_images(row_dict.get("images"))
                 except Exception:
                     row_dict["images"] = []
             
@@ -753,7 +777,18 @@ def get_all_gallery_events_en():
         
         # Fetch all rows and convert to list of dictionaries
         rows = cursor.fetchall()
-        members = [dict(zip(columns, row)) for row in rows]
+        members = []
+        for row in rows:
+            row_dict = dict(zip(columns, row))
+            
+            # Fix images column if it's a JSON string
+            if "images" in row_dict and row_dict["images"]:
+                try:
+                    row_dict["images"] = normalize_images(row_dict.get("images"))
+                except Exception:
+                    row_dict["images"] = []
+            
+            members.append(row_dict)
         
         return members
 
@@ -995,7 +1030,18 @@ def get_all_gallery_events_gu():
         
         # Fetch all rows and convert to list of dictionaries
         rows = cursor.fetchall()
-        members = [dict(zip(columns, row)) for row in rows]
+        members = []
+        for row in rows:
+            row_dict = dict(zip(columns, row))
+            
+            # Fix images column if it's a JSON string
+            if "images" in row_dict and row_dict["images"]:
+                try:
+                    row_dict["images"] = normalize_images(row_dict.get("images"))
+                except Exception:
+                    row_dict["images"] = []
+            
+            members.append(row_dict)
         
         return members
 
