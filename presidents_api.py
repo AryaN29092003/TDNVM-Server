@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException,Body
 import mysql.connector
 from fastapi.middleware.cors import CORSMiddleware
-from typing import List, Dict
+from typing import List, Dict, Optional
 from pydantic import BaseModel
 from fastapi.responses import JSONResponse
 from fastapi.exception_handlers import RequestValidationError
@@ -9,12 +9,12 @@ from fastapi.exceptions import RequestValidationError
 from datetime import date,datetime
 from typing import Union,List,Optional
 from pydantic import BaseModel
-from googletrans import Translator
+# from googletrans import Translator
 import json
 import os
 from deep_translator import GoogleTranslator
 
-Translator= Translator()
+# Translator= Translator()
 
 
 class user(BaseModel):
@@ -80,15 +80,29 @@ class UpdateGalleryEvent(BaseModel):
     folder_url: Optional[str] = None
 
 class MemberDetail(BaseModel):
-    fullname:str
-    address:str
-    birthdate:datetime
+    first_name: str
+    middle_name: Optional[str] = None
+    last_name: str
+    address: str
+    birthdate: datetime
+    gender: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    marriage_date: Optional[datetime] = None
+    death_date: Optional[datetime] = None
 
 class UpdateMember(BaseModel):
     id: int
-    fullname: str
+    first_name: str
+    middle_name: Optional[str] = None
+    last_name: str
     address: str
-    birthdate: datetime 
+    birthdate: datetime
+    gender: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    marriage_date: Optional[datetime] = None
+    death_date: Optional[datetime] = None 
 
 class CoreTeamMember(BaseModel):
     name:str
@@ -130,7 +144,7 @@ def get_all_members():
         cursor = connection.cursor()
         
         # Get all records from members_details
-        query = "SELECT * FROM presidents_secretaries;"
+        query = "SELECT * FROM president_secrataries;"
         cursor.execute(query)
         
         # Get column names
@@ -1171,15 +1185,23 @@ def add_member(member: MemberDetail):
         connection = get_db_connection()
         cursor = connection.cursor()
 
-        query = """
-        INSERT INTO members_details_en ( fullname, address, birthdate)
-        VALUES ( %s, %s, %s);
-        """
+        fullname = " ".join(
+            part for part in [member.first_name, member.middle_name, member.last_name] if part
+        )
 
+        query = """
+        INSERT INTO members_details_en (fullname, address, birthdate, gender, phone, email, marriage_date, death_date)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
+        """
         values = (
-            member.fullname,
+            fullname,
             member.address,
-            member.birthdate
+            member.birthdate,
+            member.gender,
+            member.phone,
+            member.email,
+            member.marriage_date,
+            member.death_date,
         )
 
         cursor.execute(query, values)
@@ -1187,30 +1209,35 @@ def add_member(member: MemberDetail):
 
         new_id = cursor.lastrowid
 
-        # Build full member object with srno
         new_member = {
-            "srno": new_id,
-            "fullname": member.fullname,
+            "id": new_id,
+            "fullname": fullname,
             "address": member.address,
-            "birthdate": member.birthdate
+            "birthdate": member.birthdate,
+            "gender": member.gender,
+            "phone": member.phone,
+            "email": member.email,
+            "marriage_date": member.marriage_date,
+            "death_date": member.death_date,
         }
 
-        new_member_gu = {
-            "srno": new_id,
-            "fullname": GoogleTranslator(source='auto', target='gu').translate(member.fullname),
-            "address": GoogleTranslator(source='auto', target='gu').translate(member.address),
-            "birthdate": member.birthdate
-        }
+        fullname_gu = GoogleTranslator(source='auto', target='gu').translate(fullname)
+        address_gu = GoogleTranslator(source='auto', target='gu').translate(member.address)
+
         query_gu = """
-        INSERT INTO members_details_gu (id, fullname, address, birthdate)
-        VALUES (%s, %s, %s, %s);
+        INSERT INTO members_details_gu (id, fullname, address, birthdate, gender, phone, email, marriage_date, death_date)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
         """
-
         values_gu = (
-            new_member_gu["srno"],
-            new_member_gu['fullname'],
-            new_member_gu['address'],
-            new_member_gu['birthdate']
+            new_id,
+            fullname_gu,
+            address_gu,
+            member.birthdate,
+            member.gender,
+            member.phone,
+            member.email,
+            member.marriage_date,
+            member.death_date,
         )
         cursor.execute(query_gu, values_gu)
         connection.commit()
@@ -1218,7 +1245,7 @@ def add_member(member: MemberDetail):
         return {"message": "Member added successfully", "member": new_member}
 
     except mysql.connector.Error as e:
-        print("MySQL Error:", e)   # 👈 this will show in your terminal
+        print("MySQL Error:", e)
         raise HTTPException(status_code=500, detail=str(e))
 
     finally:
@@ -1226,48 +1253,56 @@ def add_member(member: MemberDetail):
             cursor.close()
             connection.close()
 
+
 @app.put("/update_member_en")
 def update_member(member: UpdateMember):
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
-    srno= member.id
-    # 1. Check if member exists
-    cursor.execute("SELECT * FROM members_details_en WHERE id = %s", (srno,))
+    member_id = member.id
+
+    fullname = " ".join(
+        part for part in [member.first_name, member.middle_name, member.last_name] if part
+    )
+
+    cursor.execute("SELECT * FROM members_details_en WHERE id = %s", (member_id,))
     existing = cursor.fetchone()
     if not existing:
         conn.close()
         raise HTTPException(status_code=404, detail="Member not found")
 
-    # 2. Update member
     cursor.execute(
         """
         UPDATE members_details_en
-        SET fullname = %s, address = %s, birthdate = %s
+        SET fullname = %s, address = %s, birthdate = %s, gender = %s, phone = %s, email = %s, marriage_date = %s, death_date = %s
         WHERE id = %s
         """,
-        (member.fullname, member.address, member.birthdate, srno),
+        (fullname, member.address, member.birthdate, member.gender, member.phone, member.email,
+         member.marriage_date, member.death_date, member_id),
     )
     conn.commit()
 
-     # 1. Check if member exists
-    cursor.execute("SELECT * FROM members_details_gu WHERE id = %s", (srno,))
+    cursor.execute("SELECT * FROM members_details_gu WHERE id = %s", (member_id,))
     existing = cursor.fetchone()
     if not existing:
         conn.close()
         raise HTTPException(status_code=404, detail="Member not found")
-    
+
+    fullname_gu = GoogleTranslator(source='auto', target='gu').translate(fullname)
+    address_gu = GoogleTranslator(source='auto', target='gu').translate(member.address)
+
     cursor.execute(
         """
         UPDATE members_details_gu
-        SET fullname = %s, address = %s, birthdate = %s
+        SET fullname = %s, address = %s, birthdate = %s, gender = %s, phone = %s, email = %s, marriage_date = %s, death_date = %s
         WHERE id = %s
         """,
-        (GoogleTranslator(source='auto', target='gu').translate(member.fullname),GoogleTranslator(source='auto', target='gu').translate(member.address), member.birthdate, srno),
+        (fullname_gu, address_gu, member.birthdate, member.gender, member.phone, member.email,
+         member.marriage_date, member.death_date, member_id),
     )
     conn.commit()
     conn.close()
 
-    return {"message": f"Member {srno} updated successfully"}
+    return {"message": f"Member {member_id} updated successfully"}
 
 @app.delete("/delete_member_en")
 def delete_member(request: DeleteRequest):
@@ -1275,24 +1310,24 @@ def delete_member(request: DeleteRequest):
     cursor = conn.cursor()
     srno= request.srno
 
-    cursor.execute("SELECT * FROM members_details_en WHERE srno = %s", (srno,))
+    cursor.execute("SELECT * FROM members_details_en WHERE id = %s", (srno,))
     member = cursor.fetchone()
 
     if member is None:
         conn.close()
         raise HTTPException(status_code=404, detail="Member not found")
 
-    cursor.execute("DELETE FROM members_details_en WHERE srno = %s", (srno,))
+    cursor.execute("DELETE FROM members_details_en WHERE id = %s", (srno,))
     conn.commit()
 
-    cursor.execute("SELECT * FROM members_details_gu WHERE srno = %s", (srno,))
+    cursor.execute("SELECT * FROM members_details_gu WHERE id = %s", (srno,))
     member = cursor.fetchone()
 
     if member is None:
         conn.close()
         raise HTTPException(status_code=404, detail="Member not found")
 
-    cursor.execute("DELETE FROM members_details_gu WHERE srno = %s", (srno,))
+    cursor.execute("DELETE FROM members_details_gu WHERE id = %s", (srno,))
     conn.commit()
 
     conn.close()
@@ -1456,6 +1491,28 @@ def accept_users(request: UserUpdateRequest):
             cursor.close()
             connection.close()
 
+@app.get("/ads", response_model=List[Dict])
+def get_all_ads():
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor()
+
+        query = "SELECT * FROM ads;"
+        cursor.execute(query)
+
+        columns = [desc[0] for desc in cursor.description]
+        rows = cursor.fetchall()
+        ads = [dict(zip(columns, row)) for row in rows]
+
+        return ads
+
+    except mysql.connector.Error as e:
+        return {"error": str(e)}
+
+    finally:
+        if 'connection' in locals() and connection.is_connected():
+            cursor.close()
+            connection.close()
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request, exc):
