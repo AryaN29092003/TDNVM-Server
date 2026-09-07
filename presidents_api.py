@@ -1,4 +1,6 @@
-from fastapi import FastAPI, HTTPException,Body
+from fastapi import FastAPI, HTTPException,Body,UploadFile, File, Form
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
 import mysql.connector
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict, Optional
@@ -13,9 +15,10 @@ from pydantic import BaseModel
 import json
 import os
 from deep_translator import GoogleTranslator
-
+import shutil
+import uuid
 # Translator= Translator()
-
+import json
 
 class user(BaseModel):
     first_name: str
@@ -36,10 +39,13 @@ class UserUpdateRequest(BaseModel):
     status: str
 
 class EventDeleteRequest(BaseModel):
-    id: int
+    id: str
 
 class DeleteRequest(BaseModel):
     srno: int
+
+class DeleteAd(BaseModel):
+    id: str
 
 class Event(BaseModel):
     title: str
@@ -133,6 +139,73 @@ def get_db_connection():
         database="tdnvm"
     )
 
+UPLOAD_DIR = Path(__file__).parent / "uploads"
+UPLOAD_DIR.mkdir(exist_ok=True)
+app.mount("/static", StaticFiles(directory=UPLOAD_DIR), name="static")
+
+ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
+
+
+def save_upload(file: UploadFile, subfolder: str) -> str:
+    ext = Path(file.filename).suffix.lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}")
+
+    folder = UPLOAD_DIR / subfolder / uuid.uuid4().hex
+    folder.mkdir(parents=True, exist_ok=True)
+
+    dest_path = folder / f"{uuid.uuid4().hex}{ext}"
+    content = file.file.read(MAX_FILE_SIZE + 1)
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(status_code=400, detail="File too large (max 5MB)")
+    with open(dest_path, "wb") as f:
+        f.write(content)
+
+    return f"/static/{subfolder}/{folder.name}/{dest_path.name}"
+
+def normalize_images(images_value):
+    if not images_value:
+        return []
+
+    if isinstance(images_value, list):
+        return images_value
+
+    images_value = images_value.strip()
+    if not images_value:
+        return []
+
+    # New format: JSON array
+    try:
+        parsed = json.loads(images_value)
+        if isinstance(parsed, list):
+            return parsed
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    # Legacy fallback: pipe-separated
+    if "|" in images_value:
+        return [img.strip() for img in images_value.split("|") if img.strip()]
+
+    # Legacy fallback: comma-separated
+    if "," in images_value:
+        return [img.strip() for img in images_value.split(",") if img.strip()]
+
+    return [images_value]
+
+def delete_image_files(image_urls):
+    """Deletes the on-disk folder for each stored image URL (each save_upload
+    call creates its own uuid subfolder, so we remove each one)."""
+    for url in image_urls:
+        try:
+            # url looks like /static/events/<uuid>/<filename>
+            parts = url.strip("/").split("/")
+            if len(parts) >= 3 and parts[0] == "static":
+                folder = UPLOAD_DIR / parts[1] / parts[2]
+                shutil.rmtree(folder, ignore_errors=True)
+        except Exception as e:
+            print(f"Failed to delete image folder for {url}: {e}")
+
 @app.get("/")
 def index():
     return {"message": "Hello, World!"}
@@ -192,61 +265,76 @@ def get_all_members():
             cursor.close()
             connection.close()
 
+def save_upload(file: UploadFile, subfolder: str) -> str:
+    ext = Path(file.filename).suffix.lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}")
+
+    folder = UPLOAD_DIR / subfolder / uuid.uuid4().hex
+    folder.mkdir(parents=True, exist_ok=True)
+
+    dest_path = folder / f"{uuid.uuid4().hex}{ext}"
+    with open(dest_path, "wb") as f:
+        content = file.file.read(MAX_FILE_SIZE + 1)
+        if len(content) > MAX_FILE_SIZE:
+            raise HTTPException(status_code=400, detail="File too large (max 5MB)")
+        f.write(content)
+
+    return f"/static/{subfolder}/{folder.name}/{dest_path.name}"
 
 @app.post("/add_coreteam_en")
-def create_event(member: CoreTeamMember):
+def create_coreteam_member(
+    name: str = Form(...),
+    designation: str = Form(...),
+    description: str = Form(...),
+    email: str = Form(...),
+    phone: str = Form(...),
+    linkedin: str = Form(...),
+    experience: str = Form(...),
+    achievements: str = Form(...),
+    photo: UploadFile = File(...),
+):
     try:
         connection = get_db_connection()
         cursor = connection.cursor()
 
-        
+        photo_url = save_upload(photo, "core_team")
 
         query = """
         INSERT INTO core_team_en (name,designation, photo, description,email,phone,linkedin,experience,achievements)
         VALUES (%s, %s, %s, %s, %s, %s, %s,%s,%s);
         """
-        values = (
-            member.name,
-            member.designation,
-            member.photo,
-            member.description,
-            member.email,
-            member.phone,
-            member.linkedin,
-            member.experience,
-            member.achievements
-            
-        )
+        values = (name, designation, photo_url, description, email, phone, linkedin, experience, achievements)
 
         cursor.execute(query, values)
         connection.commit()
 
-        new_id = cursor.lastrowid 
+        new_id = cursor.lastrowid
 
-        new_member={
-            'id':new_id,
-            'name': member.name,
-            'designation': member.designation,
-            'photo': member.photo,
-            'description': member.description,
-            'email': member.email,
-            'phone': member.phone,
-            'linkedin': member.linkedin,
-            'experience': member.experience,
-            'achievements': member.achievements,
-            }
-        
-        new_member_gu={
-            'id':new_id,
-            'name': GoogleTranslator(source='auto', target='gu').translate(member.name),
-            'designation': GoogleTranslator(source='auto', target='gu').translate(member.designation),
-            'photo': member.photo,
-            'description': GoogleTranslator(source='auto', target='gu').translate(member.description),
-            'email': member.email,
-            'phone': member.phone,
-            'linkedin': member.linkedin,
-            'experience': member.experience,
-            'achievements': GoogleTranslator(source='auto', target='gu').translate(member.achievements),
+        new_member = {
+            'id': new_id,
+            'name': name,
+            'designation': designation,
+            'photo': photo_url,
+            'description': description,
+            'email': email,
+            'phone': phone,
+            'linkedin': linkedin,
+            'experience': experience,
+            'achievements': achievements,
+        }
+
+        new_member_gu = {
+            'id': new_id,
+            'name': GoogleTranslator(source='auto', target='gu').translate(name),
+            'designation': GoogleTranslator(source='auto', target='gu').translate(designation),
+            'photo': photo_url,
+            'description': GoogleTranslator(source='auto', target='gu').translate(description),
+            'email': email,
+            'phone': phone,
+            'linkedin': linkedin,
+            'experience': experience,
+            'achievements': GoogleTranslator(source='auto', target='gu').translate(achievements),
         }
 
         query = """
@@ -255,22 +343,15 @@ def create_event(member: CoreTeamMember):
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
         """
         values = (
-            new_member_gu['id'],
-            new_member_gu['name'],
-            new_member_gu['designation'],
-            new_member_gu['photo'],
-            new_member_gu['description'],
-            new_member_gu['email'],
-            new_member_gu['phone'],
-            new_member_gu['linkedin'],
-            new_member_gu['experience'],
+            new_member_gu['id'], new_member_gu['name'], new_member_gu['designation'],
+            new_member_gu['photo'], new_member_gu['description'], new_member_gu['email'],
+            new_member_gu['phone'], new_member_gu['linkedin'], new_member_gu['experience'],
             new_member_gu['achievements']
         )
 
         cursor.execute(query, values)
         connection.commit()
 
-        print(new_member_gu)
         return {"message": "core team member added successfully", "member": new_member}
 
     except mysql.connector.Error as e:
@@ -282,21 +363,35 @@ def create_event(member: CoreTeamMember):
             connection.close()
 
 @app.put("/update_coreteam_en")
-def update_coreteam_member(member: CoreTeamMember):
+def update_coreteam_member(
+    id: int = Form(...),
+    name: str = Form(...),
+    designation: str = Form(...),
+    description: str = Form(...),
+    email: str = Form(...),
+    phone: str = Form(...),
+    linkedin: str = Form(...),
+    experience: str = Form(...),
+    achievements: str = Form(...),
+    photo: UploadFile = File(None),
+):
     try:
         connection = get_db_connection()
         cursor = connection.cursor(dictionary=True)
 
-        member_id = member.id  # ✅ Ensure CoreTeamMember model has an `id` field
+        member_id = id
 
-        # 1. Check if member exists
         cursor.execute("SELECT * FROM core_team_en WHERE id = %s", (member_id,))
         existing = cursor.fetchone()
         if not existing:
             connection.close()
             raise HTTPException(status_code=404, detail="Member not found")
 
-        # 2. Update member
+        if photo is not None and photo.filename:
+            photo_url = save_upload(photo, "core_team")
+        else:
+            photo_url = existing["photo"]
+
         cursor.execute(
             """
             UPDATE core_team_en
@@ -304,29 +399,16 @@ def update_coreteam_member(member: CoreTeamMember):
                 email=%s, phone=%s, linkedin=%s, experience=%s, achievements=%s
             WHERE id=%s
             """,
-            (
-                member.name,
-                member.designation,
-                member.photo,
-                member.description,
-                member.email,
-                member.phone,
-                member.linkedin,
-                member.experience,
-                member.achievements,
-                member_id,
-            ),
+            (name, designation, photo_url, description, email, phone, linkedin, experience, achievements, member_id),
         )
         connection.commit()
 
-        # 1. Check if member exists
         cursor.execute("SELECT * FROM core_team_gu WHERE id = %s", (member_id,))
         existing = cursor.fetchone()
         if not existing:
             connection.close()
             raise HTTPException(status_code=404, detail="Member not found")
 
-        # 2. Update member
         cursor.execute(
             """
             UPDATE core_team_gu
@@ -335,20 +417,16 @@ def update_coreteam_member(member: CoreTeamMember):
             WHERE id=%s
             """,
             (
-                GoogleTranslator(source='auto', target='gu').translate(member.name),
-                GoogleTranslator(source='auto', target='gu').translate(member.designation),
-                member.photo,
-                GoogleTranslator(source='auto', target='gu').translate(member.description),
-                member.email,
-                member.phone,
-                member.linkedin,
-                member.experience,
-                GoogleTranslator(source='auto', target='gu').translate(member.achievements),
+                GoogleTranslator(source='auto', target='gu').translate(name),
+                GoogleTranslator(source='auto', target='gu').translate(designation),
+                photo_url,
+                GoogleTranslator(source='auto', target='gu').translate(description),
+                email, phone, linkedin, experience,
+                GoogleTranslator(source='auto', target='gu').translate(achievements),
                 member_id,
             ),
         )
         connection.commit()
-
         connection.close()
 
         return {"message": f"Member {member_id} updated successfully"}
@@ -427,17 +505,83 @@ def get_all_members():
             cursor.close()
             connection.close()
 
-def normalize_images(images_value: str | None):
+def normalize_images(images_value):
     if not images_value:
         return []
 
-    images_value = images_value.strip()
+    # Already a Python list
+    if isinstance(images_value, list):
+        # Handle lists containing JSON-encoded lists
+        if len(images_value) == 1 and isinstance(images_value[0], str):
+            value = images_value[0].strip()
 
-    # Multiple images (pipe-separated)
+            if value.startswith("[") and value.endswith("]"):
+                try:
+                    parsed = json.loads(value)
+                    if isinstance(parsed, list):
+                        return parsed
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+        return images_value
+
+    # Convert database value to string
+    images_value = str(images_value).strip()
+
+    if not images_value:
+        return []
+
+    # First JSON decode
+    try:
+        parsed = json.loads(images_value)
+
+        if isinstance(parsed, list):
+            # Handle double-encoded JSON
+            if len(parsed) == 1 and isinstance(parsed[0], str):
+                nested = parsed[0].strip()
+
+                if nested.startswith("[") and nested.endswith("]"):
+                    try:
+                        nested_parsed = json.loads(nested)
+
+                        if isinstance(nested_parsed, list):
+                            return nested_parsed
+
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
+            return parsed
+
+        # If JSON produced a string, try decoding it again
+        if isinstance(parsed, str):
+            try:
+                nested = json.loads(parsed)
+
+                if isinstance(nested, list):
+                    return nested
+
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    # Legacy pipe-separated format
     if "|" in images_value:
-        return [img.strip() for img in images_value.split("|") if img.strip()]
+        return [
+            img.strip()
+            for img in images_value.split("|")
+            if img.strip()
+        ]
 
-    # Single image URL (may contain commas)
+    # Legacy comma-separated format
+    if "," in images_value:
+        return [
+            img.strip()
+            for img in images_value.split(",")
+            if img.strip()
+        ]
+
     return [images_value]
 
 @app.get("/events_gu", response_model=List[Dict])
@@ -519,110 +663,63 @@ def get_all_events_en():
             cursor.close()
             connection.close()
 
+import uuid
+
 @app.post("/add_events_en")
-def create_event(event: Event):
+def create_event(
+    title: str = Form(...),
+    description: str = Form(...),
+    date: date = Form(...),
+    location: str = Form(...),
+    year: int = Form(...),
+    category: str = Form(...),
+    images: List[UploadFile] = File(...),
+):
     try:
         connection = get_db_connection()
         cursor = connection.cursor()
-        folder_url = event.images[0]
-        # Convert list of images into comma-separated string (or use JSON if column supports it)
-        print(folder_url)
-        try:
-            # Allowed image extensions
-            allowed_extensions = ('.jpg', '.jpeg', '.png', '.webp')
-            image_files =[]
-            # --- STEP 1: Check if folder_url itself is an image file ---
-            if folder_url.lower().endswith(allowed_extensions):
-                # Direct image URL or file path → treat as a single image
-                # images_str = folder_url
-                image_files.append(folder_url)
-            else:
-                # --- STEP 2: Otherwise treat it as a directory ---
-                if not os.path.isdir(folder_url):
-                    raise FileNotFoundError(f"Folder not found: {folder_url}")
 
-                # Filter files by extension
-                image_files = [
-                    f for f in os.listdir(folder_url)
-                    if os.path.isfile(os.path.join(folder_url, f)) and f.lower().endswith(allowed_extensions)
-                ]
-
-                # Convert file names to full paths
-                image_files = [os.path.join(folder_url, f) for f in image_files]
-
-                images_str = ",".join(image_files)
-            
-
-        except Exception as e:
-            print(f"Error: {e}")
-            # return []
-        images_str = ",".join(image_files)
-        
+        image_urls = [save_upload(img, "events") for img in images]
+        images_json = json.dumps(image_urls)
+        new_id = str(uuid.uuid4())
 
         query = """
-        INSERT INTO events_en (title, description, date, location, year, category, images)
-        VALUES (%s, %s, %s, %s, %s, %s, %s);
+        INSERT INTO events_en (id, title, description, date, location, year, category, images)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
         """
-        values = (
-            event.title,
-            event.description,
-            event.date,
-            event.location,
-            event.year,
-            event.category,
-            images_str
-        )
+        values = (new_id, title, description, date, location, year, category, images_json)
 
         cursor.execute(query, values)
         connection.commit()
 
-        
-        new_id = cursor.lastrowid  
+        new_event = {
+            'id': new_id,
+            'title': title,
+            'description': description,
+            'date': date,
+            'location': location,
+            'year': year,
+            'category': category,
+            'images': image_urls,
+        }
 
-        new_event={
-            'id':new_id,
-            'title': event.title,
-            'description':event.description,
-            'date':event.date,
-            'location': event.location,
-            'year': event.year,
-            'category': event.category,
-            'images':event.images,}
-            
-        new_event_gu={
-            'id':new_id,
-            'title':GoogleTranslator(source='auto', target='gu').translate(event.title),
-            'description': GoogleTranslator(source='auto', target='gu').translate(event.description),
-            'date':event.date,
-            'location':  GoogleTranslator(source='auto', target='gu').translate(event.location),
-            'year': event.year,
-            'category':GoogleTranslator(source='auto', target='gu').translate(event.category),
-            'images':event.images,}
-            
         query_gu = """
         INSERT INTO events_gu (id, title, description, date, location, year, category, images)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
         """
         values_gu = (
-            new_event_gu['id'],
-            new_event_gu['title'],
-            new_event_gu['description'],
-            new_event_gu['date'],
-            new_event_gu['location'],
-            new_event_gu['year'],
-            new_event_gu['category'],
-            images_str  
+            new_id,
+            GoogleTranslator(source='auto', target='gu').translate(title),
+            GoogleTranslator(source='auto', target='gu').translate(description),
+            date,
+            GoogleTranslator(source='auto', target='gu').translate(location),
+            year,
+            GoogleTranslator(source='auto', target='gu').translate(category),
+            images_json,
         )
 
         cursor.execute(query_gu, values_gu)
         connection.commit()
-
-            # 'name': Translator.translate(member.name,dest='gu').text,
-
-
-        # # fetch inserted row
-        # cursor.execute("SELECT * FROM events_en WHERE id = %s", (new_id,))
-        # new_event = cursor.fetchone()
 
         return {"message": "Event created successfully", "event": new_event}
 
@@ -635,12 +732,18 @@ def create_event(event: Event):
             connection.close()
 
 @app.put("/update_event_en")
-def update_member(event: UpdateEvent):
+def update_member(
+    id: str = Form(...),
+    title: str = Form(...),
+    description: str = Form(...),
+    date: date = Form(...),
+    location: str = Form(...),
+    year: int = Form(...),
+    category: str = Form(...),
+    images: List[UploadFile] = File(None),
+):
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
-    id= event.id
-    if event.images is not None:
-        images = event.images
 
     cursor.execute("SELECT * FROM events_en WHERE id = %s", (id,))
     existing = cursor.fetchone()
@@ -648,85 +751,29 @@ def update_member(event: UpdateEvent):
         conn.close()
         raise HTTPException(status_code=404, detail="Event not found")
 
-    # -------------------------------
-    # PROCESS IMAGES PROPERLY
-    # -------------------------------
-    images_str = existing["images"] 
-    print(images)
-    if isinstance(images, list) and len(images) > 0:
-        folder_url = event.images[0]
-        print(folder_url)
-        # Convert list of images into comma-separated string (or use JSON if column supports it)
-        try:
-            allowed_extensions = ('.jpg', '.jpeg', '.png', '.webp')
-            image_files =[]
-            # --- STEP 1: Check if folder_url itself is an image file ---
-            if folder_url.lower().endswith(allowed_extensions):
-                # Direct image URL or file path → treat as a single image
-                # images_str = folder_url
-                image_files.append(folder_url)
-            else:
-                # --- STEP 2: Otherwise treat it as a directory ---
-                if not os.path.isdir(folder_url):
-                    raise FileNotFoundError(f"Folder not found: {folder_url}")
+    has_new_images = images and len(images) > 0 and images[0].filename
 
-                # Filter files by extension
-                image_files = [
-                    f for f in os.listdir(folder_url)
-                    if os.path.isfile(os.path.join(folder_url, f)) and f.lower().endswith(allowed_extensions)
-                ]
-
-                # Convert file names to full paths
-                image_files = [os.path.join(folder_url, f) for f in image_files]
-
-                images_str = ",".join(image_files)
-
-        except Exception as e:
-            print(f"Error: {e}")
-            # return []
-        images_str = ",".join(image_files)
-    # -------------------------
-    # CASE 2: single URL sent as string
-    # -------------------------
-    elif isinstance(images, str) and images.strip():
-
-        allowed_extensions = ('.jpg', '.jpeg', '.png', '.webp')
-
-        # If it's a single image URL
-        if images.lower().endswith(allowed_extensions):
-            images_str = images  # use the new one
-        else:
-            # If not an image → ignore and keep existing
-            images_str = existing["images"]
-
-    # -------------------------
-    # CASE 3: images is None or empty → keep existing
-    # -------------------------
+    if has_new_images:
+        old_urls = normalize_images(existing["images"])
+        delete_image_files(old_urls)
+        new_urls = [save_upload(img, "events") for img in images]
+        images_json = json.dumps(new_urls)
     else:
-        images_str = existing["images"]
-        print(images_str)
-    # 1. Check if event exists
-    cursor.execute("SELECT * FROM events_en WHERE id = %s", (id,))
-    existing = cursor.fetchone()
-    if not existing:
-        conn.close()
-        raise HTTPException(status_code=404, detail="Event not found")
+        images_json = existing["images"]
 
-    # 2. Update event
     cursor.execute(
         """
         UPDATE events_en
         SET title = %s, description = %s, date = %s, location = %s, year = %s, category = %s, images = %s
         WHERE id = %s
         """,
-        (event.title, event.description, event.date, event.location, event.year, event.category, images_str, id),
+        (title, description, date, location, year, category, images_json, id),
     )
     conn.commit()
 
-    # 1. Check if event exists
     cursor.execute("SELECT * FROM events_gu WHERE id = %s", (id,))
-    existing = cursor.fetchone()
-    if not existing:
+    existing_gu = cursor.fetchone()
+    if not existing_gu:
         conn.close()
         raise HTTPException(status_code=404, detail="Event not found")
 
@@ -736,12 +783,22 @@ def update_member(event: UpdateEvent):
         SET title = %s, description = %s, date = %s, location = %s, year = %s, category = %s, images = %s
         WHERE id = %s
         """,
-        (GoogleTranslator(source='auto', target='gu').translate(event.title), GoogleTranslator(source='auto', target='gu').translate(event.description), event.date, GoogleTranslator(source='auto', target='gu').translate(event.location), event.year, GoogleTranslator(source='auto', target='gu').translate(event.category), images_str, id),
+        (
+            GoogleTranslator(source='auto', target='gu').translate(title),
+            GoogleTranslator(source='auto', target='gu').translate(description),
+            date,
+            GoogleTranslator(source='auto', target='gu').translate(location),
+            year,
+            GoogleTranslator(source='auto', target='gu').translate(category),
+            images_json,
+            id,
+        ),
     )
     conn.commit()
 
     cursor.execute("SELECT * FROM events_en WHERE id = %s", (id,))
     updated_event = cursor.fetchone()
+    updated_event["images"] = normalize_images(updated_event["images"])
 
     conn.close()
 
@@ -750,8 +807,8 @@ def update_member(event: UpdateEvent):
 @app.delete("/delete_event_en")
 def delete_member(request: EventDeleteRequest):
     conn = get_db_connection()
-    cursor = conn.cursor()
-    id= request.id
+    cursor = conn.cursor(dictionary=True)
+    id = request.id
 
     cursor.execute("SELECT * FROM events_en WHERE id = %s", (id,))
     member = cursor.fetchone()
@@ -760,15 +817,18 @@ def delete_member(request: EventDeleteRequest):
         conn.close()
         raise HTTPException(status_code=404, detail="Member not found")
 
+    delete_image_files(normalize_images(member["images"]))
+
     cursor.execute("DELETE FROM events_en WHERE id = %s", (id,))
     conn.commit()
 
     cursor.execute("SELECT * FROM events_gu WHERE id = %s", (id,))
-    member = cursor.fetchone()
+    member_gu = cursor.fetchone()
 
-    if member is None:
+    if member_gu is None:
         conn.close()
         raise HTTPException(status_code=404, detail="Member not found")
+
     cursor.execute("DELETE FROM events_gu WHERE id = %s", (id,))
     conn.commit()
     conn.close()
@@ -1513,6 +1573,53 @@ def get_all_ads():
         if 'connection' in locals() and connection.is_connected():
             cursor.close()
             connection.close()
+
+@app.post("/add_ads")
+def add_ad(image: UploadFile = File(...)):
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor()
+
+        image_url = save_upload(image, "ads")
+        new_id = str(uuid.uuid4())
+
+        query = "INSERT INTO ads (id, imageurl) VALUES (%s, %s);"
+        cursor.execute(query, (new_id, image_url))
+        connection.commit()
+
+        return {"message": "Ad added successfully", "ad": {"id": new_id, "imageurl": image_url}}
+
+    except mysql.connector.Error as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    finally:
+        if 'connection' in locals() and connection.is_connected():
+            cursor.close()
+            connection.close()
+
+
+@app.delete("/delete_ads")
+def delete_ad(request: DeleteAd):
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor(dictionary=True)
+
+        cursor.execute("SELECT * FROM ads WHERE id = %s", (request.id,))
+        existing = cursor.fetchone()
+        if not existing:
+            connection.close()
+            raise HTTPException(status_code=404, detail="Ad not found")
+
+        delete_image_files([existing["imageurl"]])
+
+        cursor.execute("DELETE FROM ads WHERE id = %s", (request.id,))
+        connection.commit()
+        connection.close()
+
+        return {"message": "Ad deleted successfully"}
+
+    except mysql.connector.Error as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request, exc):
